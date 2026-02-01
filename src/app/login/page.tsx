@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CalendarDays, AlertCircle } from "lucide-react";
 import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export default function LoginPage() {
+function LoginContent() {
     const searchParams = useSearchParams();
     const error = searchParams.get("error");
 
@@ -50,5 +51,17 @@ export default function LoginPage() {
                 </Card>
             </div>
         </div>
+    );
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex h-screen items-center justify-center bg-muted/40">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+            </div>
+        }>
+            <LoginContent />
+        </Suspense>
     );
 }

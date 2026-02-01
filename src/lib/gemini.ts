@@ -2,15 +2,19 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Initialize inside functions to ensure env vars are fresh
 
+const MODELS_TO_TRY = [
+  "gemini-1.5-flash-latest",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
+  "gemini-2.0-flash-exp",
+  "gemini-1.5-pro-latest"
+];
+
 export async function parseTimetableImage(file: File): Promise<any> {
-  const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || "";
+  const apiKey = (process.env.NEXT_PUBLIC_GEMINI_API_KEY || "").trim();
   if (!apiKey) throw new Error("Gemini API Key not set in environment");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  console.log("Using model for parsing:", "gemini-1.5-flash");
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-  // Convert file to base64
   const base64Data = await fileToGenerativePart(file);
 
   const prompt = `
@@ -29,13 +33,26 @@ export async function parseTimetableImage(file: File): Promise<any> {
     Return ONLY legitimate JSON, no markdown code fences.
   `;
 
-  const result = await model.generateContent([prompt, base64Data]);
-  const response = await result.response;
-  const text = response.text();
+  let lastError: any = null;
 
-  // Clean up code fences if present
-  const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
-  return JSON.parse(cleanText);
+  for (const modelId of MODELS_TO_TRY) {
+    try {
+      console.log(`Attempting parsing with model: ${modelId}`);
+      const model = genAI.getGenerativeModel({ model: modelId });
+      const result = await model.generateContent([prompt, base64Data]);
+      const response = await result.response;
+      const text = response.text();
+
+      const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+      console.log(`✅ Parsing success with model: ${modelId}`);
+      return JSON.parse(cleanText);
+    } catch (error: any) {
+      console.error(`❌ Parsing failed with model ${modelId}:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("No available Gemini models found for parsing.");
 }
 
 export async function chatWithAI(query: string, context: any): Promise<{ text: string, toolCalls?: any[] }> {
@@ -43,12 +60,9 @@ export async function chatWithAI(query: string, context: any): Promise<{ text: s
   if (!apiKey) throw new Error("Gemini API Key not set in environment");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  // These IDs were found via diagnostic script full_models_list.json
-  const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-pro-latest"];
-
   let lastError: any = null;
 
-  for (const modelId of modelsToTry) {
+  for (const modelId of MODELS_TO_TRY) {
     try {
       console.log(`Attempting chat with model: ${modelId}`);
       const model = genAI.getGenerativeModel({ model: modelId });
@@ -95,19 +109,18 @@ export async function chatWithAI(query: string, context: any): Promise<{ text: s
       const response = await result.response;
       const toolCalls = response.functionCalls();
 
-      console.log(`✅ Success with model: ${modelId}`);
+      console.log(`✅ Chat success with model: ${modelId}`);
       return {
         text: response.text(),
         toolCalls: toolCalls
       };
     } catch (error: any) {
-      console.error(`❌ Failed with model ${modelId}:`, error.message);
+      console.error(`❌ Chat failed with model ${modelId}:`, error.message);
       lastError = error;
-      // Continue to next model on 404 or other errors
     }
   }
 
-  throw lastError || new Error("No available Gemini models found for this API key.");
+  throw lastError || new Error("No available Gemini models found for chatting.");
 }
 
 async function fileToGenerativePart(file: File) {

@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, Bot, User, Loader2 } from "lucide-react";
 import { useStore } from "@/lib/store";
+import { chatWithAIAction } from "@/app/actions/gemini-actions";
+import { toast } from "sonner";
 
 interface Message {
     id: string;
@@ -36,8 +38,6 @@ export function ChatInterface() {
         setIsLoading(true);
 
         try {
-            const { chatWithAI } = await import('@/lib/gemini');
-            const { toast } = await import('sonner');
             const cleanContext = {
                 timetable: timetable.map(d => ({
                     day: d.day,
@@ -45,7 +45,7 @@ export function ChatInterface() {
                 })),
                 attendance: attendance.map(a => ({ subject: a.subject, attended: a.attended, missed: a.missed }))
             };
-            const response = await chatWithAI(userMessage.content, cleanContext);
+            const response = await chatWithAIAction(userMessage.content, cleanContext);
 
             let aiContent = response.text || "I've processed your request.";
 

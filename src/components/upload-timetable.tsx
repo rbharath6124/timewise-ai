@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Upload, Loader2, FileImage } from "lucide-react";
 import { useStore } from "@/lib/store";
-// Import AI service later
+import { parseTimetableAction } from "@/app/actions/gemini-actions";
 
 export function UploadTimetable() {
     const [file, setFile] = useState<File | null>(null);
@@ -24,8 +24,17 @@ export function UploadTimetable() {
 
         setIsUploading(true);
         try {
-            const { parseTimetableImage } = await import('@/lib/gemini');
-            const parsedData = await parseTimetableImage(file);
+            // Convert file to base64 for the server action
+            const base64Data = await new Promise<{ data: string, mimeType: string }>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64String = (reader.result as string).split(",")[1];
+                    resolve({ data: base64String, mimeType: file.type });
+                };
+                reader.readAsDataURL(file);
+            });
+
+            const parsedData = await parseTimetableAction(base64Data);
             setTimetable(parsedData);
             alert("Timetable parsed successfully!");
         } catch (error: any) {

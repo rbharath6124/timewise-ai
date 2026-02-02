@@ -126,6 +126,23 @@ VALIDATION RULES (MUST ENFORCE):
                 // Raw data in day-keyed object format
                 const rawData = JSON.parse(text);
 
+                // --- TIME CORRECTION ENGINE ---
+                const normalizeTime = (t: string) => {
+                    if (!t) return "";
+                    // Remove extra spaces/dots
+                    const clean = t.replace(/\s/g, "").replace(/\./g, ":");
+                    let [hStr, mStr] = clean.split(":");
+                    let h = parseInt(hStr);
+                    let m = parseInt(mStr) || 0;
+
+                    if (isNaN(h)) return t;
+
+                    // Auto-convert afternoon slots (1, 2, 3, 4) to 24h
+                    if (h >= 1 && h <= 5) h += 12;
+
+                    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                };
+
                 // Map to our internal array-based format
                 const daysMap: Record<string, string> = {
                     monday: "Monday",
@@ -136,18 +153,31 @@ VALIDATION RULES (MUST ENFORCE):
                 };
 
                 const transformedData = Object.entries(rawData).map(([dayKey, periods]: [string, any]) => {
-                    return {
-                        day: daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1)),
-                        periods: periods.map((p: any) => ({
+                    const dayName = daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1));
+
+                    const cleanPeriods = (periods || []).flatMap((p: any) => {
+                        const start = normalizeTime(p.start);
+                        const end = normalizeTime(p.end);
+
+                        // If course_code has multiple IDs (SSDX 11/12), keep them together as one entry
+                        // Or split them if preferred. Re-reading user request: "If a cell contains multiple course codes, expand them"
+                        const codes = p.course_code.split(/[\/\+]/);
+
+                        return codes.map((code: string) => ({
                             id: Math.random().toString(36).substring(7),
-                            subject: p.course_code,
+                            subject: code.trim(),
                             courseName: p.course_name,
                             teacherName: p.faculty,
-                            startTime: p.start,
-                            endTime: p.end,
+                            startTime: start,
+                            endTime: end,
                             room: p.hall,
                             type: "Lecture"
-                        }))
+                        }));
+                    });
+
+                    return {
+                        day: dayName,
+                        periods: cleanPeriods
                     };
                 });
 

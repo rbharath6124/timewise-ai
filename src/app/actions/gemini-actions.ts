@@ -15,12 +15,8 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
     try {
         const apiKey = (process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || "").trim();
         if (!apiKey) {
-            console.error("❌ GEMINI_API_KEY missing");
             return { error: "GEMINI_API_KEY not found. Please set it in Vercel Environment Variables." };
         }
-
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
         const prompt = `
             Analyze this timetable image and extract the schedule into a strict JSON format.
@@ -38,30 +34,61 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
             Return ONLY legitimate JSON, no markdown code fences.
         `;
 
-        const result = await model.generateContent([
-            prompt,
-            {
-                inlineData: {
-                    data: base64Data.data,
-                    mimeType: base64Data.mimeType
+        let lastError: any = null;
+
+        // Try multiple versions and models to bypass 404 or compatibility issues
+        for (const v of VERSIONS) {
+            for (const m of ["gemini-1.5-flash", "gemini-1.5-pro"]) {
+                try {
+                    const genUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}:generateContent?key=${apiKey}`;
+                    console.log(`📡 [PARSER] Trying ${v}/${m}...`);
+
+                    const res = await fetch(genUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            contents: [{
+                                parts: [
+                                    { text: prompt },
+                                    {
+                                        inline_data: {
+                                            mime_type: base64Data.mimeType,
+                                            data: base64Data.data
+                                        }
+                                    }
+                                ]
+                            }]
+                        })
+                    });
+
+                    if (res.status === 200) {
+                        const data = await res.json();
+                        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                        const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+
+                        try {
+                            const parsed = JSON.parse(cleanText);
+                            console.log(`✅ [PARSER] Success with ${v}/${m}`);
+                            return { success: true, data: parsed };
+                        } catch (parseError: any) {
+                            console.error("JSON Parse Error:", text);
+                            lastError = new Error("AI returned invalid JSON format.");
+                            continue;
+                        }
+                    } else {
+                        const errData = await res.json().catch(() => ({}));
+                        lastError = new Error(`API ${v}/${m} returned ${res.status}: ${errData.error?.message || "Unknown error"}`);
+                    }
+                } catch (error: any) {
+                    lastError = error;
                 }
             }
-        ]);
-
-        const response = await result.response;
-        const text = response.text();
-
-        const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
-        try {
-            const parsed = JSON.parse(cleanText);
-            return { success: true, data: parsed };
-        } catch (parseError: any) {
-            console.error("JSON Parse Error:", text);
-            return { error: "Failed to parse AI response as JSON. The AI might have returned invalid format." };
         }
 
+        return { error: `Parsing failed after trying all endpoints: ${lastError?.message || "No endpoints reachable"}` };
+
     } catch (error: any) {
-        console.error("Gemini Parsing Action Error:", error);
+        console.error("Gemini Parsing Action Global Error:", error);
         return { error: error.message || "An unexpected error occurred during parsing." };
     }
 }

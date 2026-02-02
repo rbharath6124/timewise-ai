@@ -34,8 +34,13 @@ export function UploadTimetable() {
                 reader.readAsDataURL(file);
             });
 
-            const parsedData = await parseTimetableAction(base64Data);
-            setTimetable(parsedData);
+            const response = await parseTimetableAction(base64Data);
+
+            if (response.error) {
+                throw new Error(response.error);
+            }
+
+            setTimetable(response.data);
             alert("Timetable parsed successfully!");
         } catch (error: any) {
             console.error("Parsing failed:", error);

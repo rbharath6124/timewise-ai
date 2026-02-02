@@ -47,6 +47,10 @@ export function ChatInterface() {
             };
             const response = await chatWithAIAction(userMessage.content, cleanContext);
 
+            if (response.error) {
+                throw new Error(response.error);
+            }
+
             let aiContent = response.text || "I've processed your request.";
 
             if (response.toolCalls && response.toolCalls.length > 0) {
@@ -63,9 +67,7 @@ export function ChatInterface() {
             setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: aiContent }]);
         } catch (error: any) {
             console.error("Chat failed:", error);
-            const errorMessage = error.message?.includes("API key")
-                ? "Your API key seems invalid or missing. Please check your .env.local file."
-                : "I had trouble reaching my AI brain. It might be a network issue or quota limit.";
+            const errorMessage = error.message || "I had trouble reaching my AI brain. It might be a network issue or quota limit.";
             setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "assistant", content: errorMessage }]);
         } finally {
             setIsLoading(false);

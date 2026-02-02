@@ -18,6 +18,10 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
             return { error: "GEMINI_API_KEY not found. Please set it in Vercel Environment Variables." };
         }
 
+        const genAI = new GoogleGenerativeAI(apiKey);
+        // Correct Model for Free Tier: gemini-1.5-flash
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
         const prompt = `
             Analyze this timetable image and extract the schedule into a strict JSON format.
             The JSON should be an array of objects, where each object represents a day.
@@ -34,58 +38,27 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
             Return ONLY legitimate JSON, no markdown code fences.
         `;
 
-        let lastError: any = null;
-
-        // Try multiple versions and models to bypass 404 or compatibility issues
-        for (const v of VERSIONS) {
-            for (const m of ["gemini-1.5-flash", "gemini-1.5-pro"]) {
-                try {
-                    const genUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}:generateContent?key=${apiKey}`;
-                    console.log(`📡 [PARSER] Trying ${v}/${m}...`);
-
-                    const res = await fetch(genUrl, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            contents: [{
-                                parts: [
-                                    { text: prompt },
-                                    {
-                                        inline_data: {
-                                            mime_type: base64Data.mimeType,
-                                            data: base64Data.data
-                                        }
-                                    }
-                                ]
-                            }]
-                        })
-                    });
-
-                    if (res.status === 200) {
-                        const data = await res.json();
-                        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-                        const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
-
-                        try {
-                            const parsed = JSON.parse(cleanText);
-                            console.log(`✅ [PARSER] Success with ${v}/${m}`);
-                            return { success: true, data: parsed };
-                        } catch (parseError: any) {
-                            console.error("JSON Parse Error:", text);
-                            lastError = new Error("AI returned invalid JSON format.");
-                            continue;
-                        }
-                    } else {
-                        const errData = await res.json().catch(() => ({}));
-                        lastError = new Error(`API ${v}/${m} returned ${res.status}: ${errData.error?.message || "Unknown error"}`);
-                    }
-                } catch (error: any) {
-                    lastError = error;
+        const result = await model.generateContent([
+            {
+                inlineData: {
+                    data: base64Data.data,
+                    mimeType: base64Data.mimeType
                 }
-            }
-        }
+            },
+            { text: prompt }
+        ]);
 
-        return { error: `Parsing failed after trying all endpoints: ${lastError?.message || "No endpoints reachable"}` };
+        const response = await result.response;
+        const text = response.text();
+        const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+
+        try {
+            const parsed = JSON.parse(cleanText);
+            return { success: true, data: parsed };
+        } catch (parseError: any) {
+            console.error("JSON Parse Error:", text);
+            return { error: "Failed to parse AI response as JSON. The AI might have returned invalid format." };
+        }
 
     } catch (error: any) {
         console.error("Gemini Parsing Action Global Error:", error);
@@ -98,40 +71,20 @@ export async function chatWithAIAction(query: string, context: any): Promise<{ t
         const apiKey = (process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || "").trim();
         if (!apiKey) return { error: "GEMINI_API_KEY not found." };
 
-        let lastError: any = null;
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-        for (const v of VERSIONS) {
-            for (const m of ["gemini-1.5-flash", "gemini-1.5-pro"]) {
-                try {
-                    const genUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}:generateContent?key=${apiKey}`;
-                    const res = await fetch(genUrl, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            contents: [
-                                { role: "user", parts: [{ text: "You are TimeWise AI, a helpful assistant." }] },
-                                { role: "model", parts: [{ text: "Understood." }] },
-                                { role: "user", parts: [{ text: `Context: ${JSON.stringify(context)}\nUser: ${query}` }] }
-                            ]
-                        })
-                    });
+        const result = await model.generateContent([
+            { text: "You are TimeWise AI, a helpful assistant." },
+            { text: `Context: ${JSON.stringify(context)}\nUser: ${query}` }
+        ]);
 
-                    if (res.status === 200) {
-                        const data = await res.json();
-                        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "I processed that.";
-                        return { text };
-                    } else {
-                        const errData = await res.json().catch(() => ({}));
-                        lastError = new Error(`API returned ${res.status}: ${errData.error?.message || "Unknown error"}`);
-                    }
-                } catch (error: any) {
-                    lastError = error;
-                }
-            }
-        }
+        const response = await result.response;
+        const text = response.text() || "I processed that.";
+        return { text };
 
-        return { error: `Chat failed: ${lastError?.message || "No endpoints reachable"}` };
-    } catch (globalError: any) {
-        return { error: globalError.message || "An unexpected chat error occurred." };
+    } catch (error: any) {
+        console.error("Chat Action Error:", error);
+        return { error: error.message || "An unexpected chat error occurred." };
     }
 }

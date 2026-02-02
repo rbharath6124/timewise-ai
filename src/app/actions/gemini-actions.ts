@@ -15,7 +15,10 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
     const apiKey = (process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || "").trim();
     if (!apiKey) throw new Error("GEMINI_API_KEY (Server) not found in environment variables.");
 
-    console.log(`[NUCLEAR] Key length: ${apiKey.length}. Deployment: Production. Region: bom1`);
+    const genAI = new GoogleGenerativeAI(apiKey);
+    
+    // Use gemini-1.5-flash as it is fast and capable for this task
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     const prompt = `
     Analyze this timetable image and extract the schedule into a strict JSON format.
@@ -33,66 +36,27 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
     Return ONLY legitimate JSON, no markdown code fences.
   `;
 
-    let lastError: any = null;
-
-    // Try EVERY configuration
-    for (const v of VERSIONS) {
-        for (const m of MODELS) {
-            try {
-                console.log(`[NUCLEAR] Probing ${v}/${m}...`);
-
-                // 1. Direct fetch probe (Quickest way to check 404/403)
-                const probeUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}?key=${apiKey}`;
-                const probeRes = await fetch(probeUrl);
-
-                if (probeRes.status !== 200) {
-                    const probeData = await probeRes.json().catch(() => ({}));
-                    console.warn(`[NUCLEAR] ${v}/${m} probe failed (${probeRes.status}):`, JSON.stringify(probeData));
-                    continue;
+    try {
+        const result = await model.generateContent([
+            prompt,
+            {
+                inlineData: {
+                    data: base64Data.data,
+                    mimeType: base64Data.mimeType
                 }
-
-                console.log(`[NUCLEAR] Found active endpoint: ${v}/${m}. Processing...`);
-
-                // 2. Manual fetch processing (to bypass SDK potential issues)
-                const genUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}:generateContent?key=${apiKey}`;
-                const genRes = await fetch(genUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: prompt },
-                                { inlineData: { data: base64Data.data, mimeType: base64Data.mimeType } }
-                            ]
-                        }]
-                    })
-                });
-
-                if (genRes.status !== 200) {
-                    const errData = await genRes.json().catch(() => ({}));
-                    throw new Error(`Manual fetch failed (${genRes.status}): ${JSON.stringify(errData)}`);
-                }
-
-                const result = await genRes.json();
-                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-                if (!text) {
-                    console.error("[NUCLEAR] Raw result:", JSON.stringify(result));
-                    throw new Error("Empty response or blocked content");
-                }
-
-                const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
-                console.log(`✅ [NUCLEAR] SUCCESS with ${v}/${m}`);
-                return JSON.parse(cleanText);
-
-            } catch (error: any) {
-                console.error(`❌ [NUCLEAR] Error with ${v}/${m}:`, error.message);
-                lastError = error;
             }
-        }
-    }
+        ]);
 
-    throw new Error(`All Gemini endpoints returned 404 or refused access. Detailed error: ${lastError?.message || "Unknown"}`);
+        const response = await result.response;
+        const text = response.text();
+        
+        const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+        return JSON.parse(cleanText);
+
+    } catch (error: any) {
+        console.error("Gemini Parsing Error:", error);
+        throw new Error(`Failed to parse timetable: ${error.message}`);
+    }
 }
 
 export async function chatWithAIAction(query: string, context: any): Promise<{ text: string, toolCalls?: any[] }> {

@@ -37,46 +37,39 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     );
 
                     const prompt = `
-                        TASK: Convert the Academic Timetable image into structured JSON.
+                        ACT AS A DATA EXTRACTION SPECIALIST. 
+                        YOUR GOAL: Extract 100% of the classes from the provided academic timetable.
                         
-                        1. CANONICAL TIMES (Reference these for all classes):
-                           - Slots: 09:00-09:50, 09:50-10:40, 11:00-11:50, 11:50-12:40, 01:40-02:30, 02:30-03:20, 03:20-04:10.
-                           - VERTICAL BREAKS: 10:40-11:00 (Tea) and 12:40-01:40 (Lunch). IGNORE THESE.
-                        
-                        2. SCANNING LOGIC:
-                           - For each Day row (Mon-Fri), find every class cell.
-                           - Identify the START and END time for each cell based on the header.
-                           - IMPORTANT: If a cell spans multiple slots (e.g. 11:00 to 12:40), capture the full start/end.
-                           - MULTI-SUBJECT CELLS: If a cell contains multiple codes (e.g. "CEDX 01/07" or "SSDX 11/12/13/14"), you MUST create a SEPARATE JSON object for each code.
-                        
-                        3. LEGEND MATCHING:
-                           - Use the Course Details table (bottom) to look up every Course Code.
-                           - Assign the correct "Course Name", "Faculty/Teacher", and "Hall/Room".
-                        
-                        4. OUTPUT SCHEMA:
+                        SYSTEMATIC SCANNING PROTOCOL:
+                        1. IDENTIFY ALL DAYS: Capture Monday, Tuesday, Wednesday, Thursday, and Friday.
+                        2. SCAN THE FULL HORIZONTAL AXIS: From 09:00 AM till 04:10 PM.
+                        3. CROSS THE LUNCH BARRIER: There is a vertical "Lunch Break" (12:40 - 01:40). YOU MUST SCAN TO THE RIGHT OF THIS BAR to extract the afternoon sessions.
+                        4. AFTERNOON SLOTS (CRITICAL - DO NOT MISS):
+                           - 01:40 - 02:30
+                           - 02:30 - 03:20
+                           - 03:20 - 04:10
+                        5. MULTI-CODE EXPANSION: If a cell has multiple codes (e.g., CEDX 01/07), create a standalone JSON object for each code with the same time.
+                        6. LEGEND MATCHING: Look up every code in the legend at the bottom to find the "Course Name", "Faculty/Teacher", and "Hall/Room".
+
+                        JSON SCHEMA:
                         {
                           "monday": [
                             {
-                              "code": "CEDX 01",
-                              "name": "Full Name from Legend",
-                              "teacher": "Teacher from Legend",
-                              "start": "09:00",
-                              "end": "09:50",
-                              "hall": "ES 001"
-                            },
-                            {
-                              "code": "CEDX 07",
-                              "name": "Full Name from Legend (Matched for 07)",
-                              "teacher": "Teacher from Legend (Matched for 07)",
-                              "start": "09:00",
-                              "end": "09:50",
-                              "hall": "ES 001"
+                              "code": "Subject Code",
+                              "name": "Full Course Name from Legend",
+                              "teacher": "Teacher Name from Legend",
+                              "start": "HH:mm",
+                              "end": "HH:mm",
+                              "hall": "Room Number"
                             }
                           ],
-                          "tuesday": [], ...
+                          "tuesday": [],
+                          "wednesday": [],
+                          "thursday": [],
+                          "friday": []
                         }
-
-                        CRITICAL: Use 24-hour format (HH:mm) if possible, or standard labels. I will stabilize them in code.
+                        
+                        CRITICAL: Provide the complete data for ALL days and ALL time slots. Do not stop until the last slot (04:10) of Friday is processed.
                     `;
 
                     const result = await model.generateContent([
@@ -122,7 +115,7 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                                 endTime: normalizeTime(p.end),
                                 room: p.hall,
                                 type: "Lecture"
-                            }))
+                            })).sort((a: any, b: any) => a.startTime.localeCompare(b.startTime))
                         };
                     });
 

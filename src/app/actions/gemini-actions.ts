@@ -27,17 +27,39 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                 const prompt = `
                     Analyze this timetable image and extract the schedule into a strict JSON format.
                     The JSON should be an array of objects, where each object represents a day.
+                    
+                    Fields to include for each period:
+                    - "subject": Short code or name (e.g. CS101)
+                    - "courseName": Full name of the course
+                    - "teacherName": Name of the instructor
+                    - "startTime": Start time in STRICT 24-hour format (HH:mm, e.g. 14:30 instead of 2:30 PM)
+                    - "endTime": End time in STRICT 24-hour format (HH:mm)
+                    - "room": Room number or location
+                    - "type": "Lecture", "Lab", or "Tutorial"
+
                     Format:
                     [
                       {
                         "day": "Monday",
                         "periods": [
-                          { "id": "uuid", "subject": "Math", "startTime": "09:00", "endTime": "10:00", "type": "Lecture", "room": "101" }
+                          { 
+                            "id": "uuid", 
+                            "subject": "Math", 
+                            "courseName": "Advanced Calculus", 
+                            "teacherName": "Dr. Smith", 
+                            "startTime": "09:00", 
+                            "endTime": "10:00", 
+                            "type": "Lecture", 
+                            "room": "101" 
+                          }
                         ]
                       }
                     ]
-                    Use 24-hour format for time. If room or type is missing, omit or guess based on context if obvious.
-                    Return ONLY legitimate JSON, no markdown code fences.
+                    
+                    CRITICAL: 
+                    1. Use 24-hour format for all times. If the image has 12-hour time (AM/PM), convert it.
+                    2. If a field like room or teacher is missing, use an empty string or omit.
+                    3. Return ONLY legitimate JSON.
                 `;
 
                 const result = await model.generateContent([

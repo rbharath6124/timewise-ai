@@ -3,6 +3,8 @@ export type DayOfWeek = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Frida
 export interface ClassPeriod {
     id: string;
     subject: string;
+    courseName?: string;
+    teacherName?: string;
     startTime: string; // HH:mm 24-hour format
     endTime: string;   // HH:mm 24-hour format
     room?: string;

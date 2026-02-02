@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useStore } from "@/lib/store";
-import { MoreVertical, Check, X, Trash2, Edit2 } from "lucide-react";
+import { MoreVertical, Check, X, Trash2, Edit2, GraduationCap } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -18,10 +18,20 @@ interface AttendanceCardProps {
 }
 
 export function AttendanceCard({ subject, attended, missed }: AttendanceCardProps) {
-    const { updateAttendance, resetAttendance, editAttendance } = useStore();
+    const { updateAttendance, resetAttendance, editAttendance, timetable } = useStore();
     const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
     const [editValues, setEditValues] = useState({ attended, missed });
 
+    // Look up full course name from timetable if available
+    const getCourseName = () => {
+        for (const day of timetable) {
+            const period = day.periods.find(p => p.subject === subject);
+            if (period?.courseName) return period.courseName;
+        }
+        return null;
+    };
+
+    const courseName = getCourseName();
     const total = attended + missed;
     const percentage = total === 0 ? 0 : Math.round((attended / total) * 100);
 
@@ -62,7 +72,15 @@ export function AttendanceCard({ subject, attended, missed }: AttendanceCardProp
         <>
             <Card className="overflow-hidden">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium truncate pr-4">{subject}</CardTitle>
+                    <div className="flex flex-col pr-4 overflow-hidden">
+                        <CardTitle className="text-sm font-bold truncate pr-4">{subject}</CardTitle>
+                        {courseName && (
+                            <span className="text-[10px] text-muted-foreground truncate leading-tight flex items-center gap-1">
+                                <GraduationCap className="h-2.5 w-2.5" />
+                                {courseName}
+                            </span>
+                        )}
+                    </div>
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">

@@ -37,39 +37,45 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     );
 
                     const prompt = `
-                        ACT AS A DATA EXTRACTION SPECIALIST. 
-                        YOUR GOAL: Extract 100% of the classes from the provided academic timetable.
+                        ACT AS A PRECISION GRID EXTRACTOR. 
                         
-                        SYSTEMATIC SCANNING PROTOCOL:
-                        1. IDENTIFY ALL DAYS: Capture Monday, Tuesday, Wednesday, Thursday, and Friday.
-                        2. SCAN THE FULL HORIZONTAL AXIS: From 09:00 AM till 04:10 PM.
-                        3. CROSS THE LUNCH BARRIER: There is a vertical "Lunch Break" (12:40 - 01:40). YOU MUST SCAN TO THE RIGHT OF THIS BAR to extract the afternoon sessions.
-                        4. AFTERNOON SLOTS (CRITICAL - DO NOT MISS):
-                           - 01:40 - 02:30
-                           - 02:30 - 03:20
-                           - 03:20 - 04:10
-                        5. MULTI-CODE EXPANSION: If a cell has multiple codes (e.g., CEDX 01/07), create a standalone JSON object for each code with the same time.
-                        6. LEGEND MATCHING: Look up every code in the legend at the bottom to find the "Course Name", "Faculty/Teacher", and "Hall/Room".
+                        1. THE GRID SYSTEM (5 ROWS x 9 COLUMNS):
+                           COL 1: 09:00-09:50
+                           COL 2: 09:50-10:40
+                           COL 3: [TEA BREAK - IGNORE]
+                           COL 4: 11:00-11:50
+                           COL 5: 11:50-12:40
+                           COL 6: [LUNCH BREAK - IGNORE]
+                           COL 7: 13:40-14:30
+                           COL 8: 14:30-15:20
+                           COL 9: 15:20-16:10
+
+                        2. EXTRACTION STEPS:
+                           - STEP A: View the image as a table with 5 rows (Mon-Fri) and 9 columns.
+                           - STEP B: For each row, identify which columns contain text.
+                           - STEP C: If a cell spans multiple columns (e.g. 11:00 to 12:40), mark it as starting at Col 4 and ending at Col 5.
+                           - STEP D: For each cell, extract ALL course codes present (e.g. "SSDX 11/12").
+                           
+                        3. LEGEND LOOKUP (CRITICAL):
+                           - Find the Course Details legend at the bottom.
+                           - For EVERY course code found in a cell, create a separate entry.
+                           - Match the CORRECT "Course Name" and "Faculty/Teacher" for that specific code.
+                           - If a cell has codes "CEDX 01/07", you MUST create TWO objects: one for 01 and one for 07, each with their own unique name/teacher from the legend.
 
                         JSON SCHEMA:
                         {
                           "monday": [
                             {
-                              "code": "Subject Code",
-                              "name": "Full Course Name from Legend",
-                              "teacher": "Teacher Name from Legend",
-                              "start": "HH:mm",
-                              "end": "HH:mm",
-                              "hall": "Room Number"
+                              "code": "CEDX 01",
+                              "name": "Full Name from Legend",
+                              "teacher": "Teacher from Legend",
+                              "start_col": 1,
+                              "end_col": 1,
+                              "hall": "Room"
                             }
                           ],
-                          "tuesday": [],
-                          "wednesday": [],
-                          "thursday": [],
-                          "friday": []
+                          ...
                         }
-                        
-                        CRITICAL: Provide the complete data for ALL days and ALL time slots. Do not stop until the last slot (04:10) of Friday is processed.
                     `;
 
                     const result = await model.generateContent([
@@ -86,18 +92,9 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     const text = response.text().replace(/```json/g, "").replace(/```/g, "").trim();
                     const rawData = JSON.parse(text);
 
-                    // --- STABILIZE & NORMALIZE TRANSFORMATION ---
-                    const normalizeTime = (t: string) => {
-                        if (!t) return "00:00";
-                        const clean = t.replace(/\s/g, "").replace(/\./g, ":");
-                        let [hStr, mStr] = clean.split(":");
-                        let h = parseInt(hStr);
-                        let m = parseInt(mStr) || 0;
-                        if (isNaN(h)) return t;
-                        // Convert 1:xx, 2:xx, 3:xx, 4:xx PM to 24h
-                        if (h >= 1 && h <= 5) h += 12;
-                        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-                    };
+                    // --- COORDINATE TO TIME MAPPING ---
+                    const colToStart: Record<number, string> = { 1: "09:00", 2: "09:50", 4: "11:00", 5: "11:50", 7: "13:40", 8: "14:30", 9: "15:20" };
+                    const colToEnd: Record<number, string> = { 1: "09:50", 2: "10:40", 4: "11:50", 5: "12:40", 7: "14:30", 8: "15:20", 9: "16:10" };
 
                     const daysMap: Record<string, string> = {
                         monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday", friday: "Friday"
@@ -106,16 +103,22 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     const transformedData = Object.entries(rawData).map(([dayKey, periods]: [string, any]) => {
                         return {
                             day: daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1)),
-                            periods: (periods || []).map((p: any) => ({
-                                id: Math.random().toString(36).substring(7),
-                                subject: p.code,
-                                courseName: p.name,
-                                teacherName: p.teacher,
-                                startTime: normalizeTime(p.start),
-                                endTime: normalizeTime(p.end),
-                                room: p.hall,
-                                type: "Lecture"
-                            })).sort((a: any, b: any) => a.startTime.localeCompare(b.startTime))
+                            periods: (periods || []).flatMap((p: any) => {
+                                const startTime = colToStart[p.start_col];
+                                const endTime = colToEnd[p.end_col] || colToEnd[p.start_col];
+                                if (!startTime || !endTime) return [];
+
+                                return [{
+                                    id: Math.random().toString(36).substring(7),
+                                    subject: p.code,
+                                    courseName: p.name,
+                                    teacherName: p.teacher,
+                                    startTime,
+                                    endTime,
+                                    room: p.hall,
+                                    type: "Lecture"
+                                }];
+                            }).sort((a: any, b: any) => a.startTime.localeCompare(b.startTime))
                         };
                     });
 

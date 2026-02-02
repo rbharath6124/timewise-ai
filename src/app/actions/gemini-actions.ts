@@ -28,54 +28,44 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     generationConfig: {
                         temperature: 0.1,
                         maxOutputTokens: 8192,
+                        responseMimeType: "application/json",
                     }
                 });
                 const prompt = `
-                    ACT AS A PROFESSIONAL DATA ANALYST.
-                    IMAGE TYPE: Academic Timetable with a Grid and a Course Legend.
+                    TASK: CONVERT UNIVERSITY TIMETABLE TO JSON.
+                    
+                    IMAGE ANALYSIS RULES:
+                    1. THE GRID: Scan the top table. Note there are 9+ time columns.
+                    2. THE BREAKS: "Tea Break" (10:40-11:00) and "Lunch Break" (12:40-01:40) are VERTICAL. You MUST skip over them and continue scanning to the right.
+                    3. AFTERNOON SLOTS: Do not stop at Lunch Break. There are 3 slots after lunch: 01:40, 02:30, and 03:20.
+                    4. TIME CONVERSION (MANDATORY):
+                       - All times after 12:00 PM must be 24-hour.
+                       - 01:40 PM -> 13:40
+                       - 02:30 PM -> 14:30
+                       - 03:20 PM -> 15:20
+                       - 04:10 PM -> 16:10
+                    5. DATA MAPPING: Look at the CODE in the grid (e.g. SSDX 11). Find that code in the LEGEND (bottom table) to get the "Course Name" and "Course Faculty".
 
-                    OBJECTIVE: Create a complete JSON schedule by mapping short codes in the grid to the details in the legend.
-
-                    STEP 1: EXTRACT THE COURSE LEGEND (Bottom Table)
-                    - Identify every "Course Code" and its corresponding "Course Name" and "Course Faculty".
-                    - Example: CEDX 01 -> Advanced Design of RC, Faculty: Dr.A.K.Kaliluthin.
-
-                    STEP 2: SCAN THE GRID (Top Table)
-                    - Columns: Time slots (e.g., 09:00 - 09:50).
-                    - Rows: Days of the week (Mon, Tue, Wed, Thu, Fri).
-                    - IGNORE: "Tea Break", "Lunch Break", "Prayer", and titles.
-
-                    STEP 3: MAPPING & VALIDATION
-                    - For every cell containing a code (e.g., SSDX 11/12/...):
-                        a) Identify the Day and Time slot.
-                        b) Look up the code in your extracted Legend to find the full Course Name and Teacher.
-                        c) Convert times to STRICT 24-hour format. Ensure afternoon slots (e.g., 01:40 PM) become (13:40).
-                        d) If a cell spans multiple slots (e.g., 11:00 - 12:40), create ONE entry with the full duration.
-
-                    OUTPUT JSON STRUCTURE:
+                    JSON SCHEMA:
                     [
                       {
-                        "day": "Monday",
+                        "day": "Monday | Tuesday | Wednesday | Thursday | Friday",
                         "periods": [
-                          { 
-                            "id": "unique_string", 
-                            "subject": "CODE", 
-                            "courseName": "FULL NAME FROM LEGEND", 
-                            "teacherName": "FACULTY FROM LEGEND", 
-                            "startTime": "HH:mm", 
-                            "endTime": "HH:mm", 
-                            "type": "Lecture/Lab/Tutorial", 
-                            "room": "ES 001" 
+                          {
+                            "id": "unique-id",
+                            "subject": "Short Code",
+                            "courseName": "Full Name from Legend",
+                            "teacherName": "Faculty from Legend",
+                            "startTime": "HH:mm (24h)",
+                            "endTime": "HH:mm (24h)",
+                            "type": "Lecture | Lab | Tutorial",
+                            "room": "Room Code"
                           }
                         ]
                       }
                     ]
-
-                    CRITICAL REQUIREMENTS:
-                    - DO NOT MISS THE AFTERNOON SLOTS (01:40 PM onwards).
-                    - If multiple codes are in one cell (e.g., CEDX 01/07), you can use the first one or combine the names.
-                    - ALL DAYS (Mon-Fri) must be included.
-                    - RETURN ONLY EXECUTABLE JSON. NO MARKDOWN.
+                    
+                    Respond with a JSON array based on the schema above. Include ALL classes for ALL days found in the image.
                 `;
 
                 const result = await model.generateContent([
@@ -90,15 +80,14 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
 
                 const response = await result.response;
                 const text = response.text();
-                const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
 
-                const parsed = JSON.parse(cleanText);
+                // Since we used responseMimeType: "application/json", 'text' is pure JSON
+                const parsed = JSON.parse(text);
                 console.log(`✅ [PARSER] Success with ${modelName}`);
                 return { success: true, data: parsed };
             } catch (error: any) {
                 console.warn(`⚠️ [PARSER] Failed with ${modelName}:`, error.message);
                 lastError = error;
-                // If it's a 404, we continue to the next model
             }
         }
 

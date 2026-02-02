@@ -37,44 +37,28 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     );
 
                     const prompt = `
-                        ACT AS A PRECISION GRID EXTRACTOR. 
+                        EXTRACT THE FULL ACADEMIC TIMETABLE.
                         
-                        1. THE GRID SYSTEM (5 ROWS x 9 COLUMNS):
-                           COL 1: 09:00-09:50
-                           COL 2: 09:50-10:40
-                           COL 3: [TEA BREAK - IGNORE]
-                           COL 4: 11:00-11:50
-                           COL 5: 11:50-12:40
-                           COL 6: [LUNCH BREAK - IGNORE]
-                           COL 7: 13:40-14:30
-                           COL 8: 14:30-15:20
-                           COL 9: 15:20-16:10
+                        1. THE GRID (MUST EXTRACT ALL 9 COLUMNS):
+                           C1: 09:00-09:50 | C2: 09:50-10:40 | C3: TEA BREAK | C4: 11:00-11:50 | C5: 11:50-12:40 | C6: LUNCH BREAK | C7: 01:40-02:30 | C8: 02:30-03:20 | C9: 03:20-04:10
 
-                        2. EXTRACTION STEPS:
-                           - STEP A: View the image as a table with 5 rows (Mon-Fri) and 9 columns.
-                           - STEP B: For each row, identify which columns contain text.
-                           - STEP C: If a cell spans multiple columns (e.g. 11:00 to 12:40), mark it as starting at Col 4 and ending at Col 5.
-                           - STEP D: For each cell, extract ALL course codes present (e.g. "SSDX 11/12").
-                           
-                        3. LEGEND LOOKUP (CRITICAL):
-                           - Find the Course Details legend at the bottom.
-                           - For EVERY course code found in a cell, create a separate entry.
-                           - Match the CORRECT "Course Name" and "Faculty/Teacher" for that specific code.
-                           - If a cell has codes "CEDX 01/07", you MUST create TWO objects: one for 01 and one for 07, each with their own unique name/teacher from the legend.
+                        2. CRITICAL - MULTI-SUBJECT CELLS:
+                           - Some cells contain multiple subjects (e.g., "CEDX 01/07" or "SSDX 11/12").
+                           - You MUST report these as separate entries if possible, or return the raw string (e.g. "CEDX 01/07") and I will split it.
+                        
+                        3. CRITICAL - AFTERNOON SESSIONS:
+                           - YOU MUST JUMP OVER THE LUNCH BREAK (Column 6).
+                           - Extract all classes sitting in Columns 7, 8, and 9. 
 
-                        JSON SCHEMA:
+                        4. LEGEND LOOKUP:
+                           - Match every code to the "Course Name" and "Faculty" in the bottom table.
+
+                        SCHEMA:
                         {
                           "monday": [
-                            {
-                              "code": "CEDX 01",
-                              "name": "Full Name from Legend",
-                              "teacher": "Teacher from Legend",
-                              "start_col": 1,
-                              "end_col": 1,
-                              "hall": "Room"
-                            }
-                          ],
-                          ...
+                             { "start_col": 1, "end_col": 1, "code": "CEDX 01/07", "name": "...", "teacher": "...", "hall": "..." },
+                             { "start_col": 7, "end_col": 7, "code": "SSDX 11/12", "name": "...", "teacher": "...", "hall": "..." }
+                          ], ...
                         }
                     `;
 
@@ -92,7 +76,7 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     const text = response.text().replace(/```json/g, "").replace(/```/g, "").trim();
                     const rawData = JSON.parse(text);
 
-                    // --- COORDINATE TO TIME MAPPING ---
+                    // --- TIME MAP ---
                     const colToStart: Record<number, string> = { 1: "09:00", 2: "09:50", 4: "11:00", 5: "11:50", 7: "13:40", 8: "14:30", 9: "15:20" };
                     const colToEnd: Record<number, string> = { 1: "09:50", 2: "10:40", 4: "11:50", 5: "12:40", 7: "14:30", 8: "15:20", 9: "16:10" };
 
@@ -101,25 +85,35 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     };
 
                     const transformedData = Object.entries(rawData).map(([dayKey, periods]: [string, any]) => {
-                        return {
-                            day: daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1)),
-                            periods: (periods || []).flatMap((p: any) => {
-                                const startTime = colToStart[p.start_col];
-                                const endTime = colToEnd[p.end_col] || colToEnd[p.start_col];
-                                if (!startTime || !endTime) return [];
+                        const dayName = daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1));
 
-                                return [{
+                        const cleanPeriods = (periods || []).flatMap((p: any) => {
+                            const startTime = colToStart[p.start_col];
+                            const endTime = colToEnd[p.end_col] || colToEnd[p.start_col];
+                            if (!startTime || !endTime) return [];
+
+                            // FAILSAFE SUBJECT SPLITTER: If the AI combined "CEDX 01/07", we split it here
+                            const subjects = p.code.split(/[\/\+]/);
+                            const prefix = p.code.match(/^[A-Z]+/)?.[0] || "";
+
+                            return subjects.map((sub: string, idx: number) => {
+                                let cleanSub = sub.trim();
+                                if (idx > 0 && !cleanSub.match(/^[A-Z]/)) cleanSub = `${prefix} ${cleanSub}`;
+
+                                return {
                                     id: Math.random().toString(36).substring(7),
-                                    subject: p.code,
+                                    subject: cleanSub,
                                     courseName: p.name,
                                     teacherName: p.teacher,
                                     startTime,
                                     endTime,
                                     room: p.hall,
                                     type: "Lecture"
-                                }];
-                            }).sort((a: any, b: any) => a.startTime.localeCompare(b.startTime))
-                        };
+                                };
+                            });
+                        }).sort((a: any, b: any) => a.startTime.localeCompare(b.startTime));
+
+                        return { day: dayName, periods: cleanPeriods };
                     });
 
                     console.log(`✅ [PARSER] Success with ${modelName} (${version})`);

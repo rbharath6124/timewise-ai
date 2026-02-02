@@ -5,8 +5,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 const VERSIONS = ["v1", "v1beta"];
 
 const MODELS = [
-    "gemini-1.5-flash",
     "gemini-2.0-flash",
+    "gemini-1.5-flash",
     "gemini-2.0-flash-exp",
     "gemini-1.5-pro"
 ];
@@ -23,43 +23,55 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
 
         for (const modelName of MODELS) {
             try {
-                const model = genAI.getGenerativeModel({ model: modelName });
+                const model = genAI.getGenerativeModel({
+                    model: modelName,
+                    generationConfig: {
+                        temperature: 0.1,
+                        maxOutputTokens: 8192,
+                    }
+                });
                 const prompt = `
-                    Analyze this timetable image and extract the schedule into a strict JSON format.
-                    The JSON should be an array of objects, where each object represents a day.
+                    ACT AS AN EXPERT DATA EXTRACTION AI. 
+                    YOUR TASK: Convert the provided timetable image into a 100% accurate, complete JSON schedule.
                     
-                    Fields to include for each period:
-                    - "subject": Short code or name (e.g. CS101)
-                    - "courseName": Full name of the course
-                    - "teacherName": Name of the instructor
-                    - "startTime": Start time in STRICT 24-hour format (HH:mm, e.g. 14:30 instead of 2:30 PM)
-                    - "endTime": End time in STRICT 24-hour format (HH:mm)
-                    - "room": Room number or location
-                    - "type": "Lecture", "Lab", or "Tutorial"
-
-                    Format:
+                    GUIDELINES FOR MAXIMUM ACCURACY:
+                    1. SCAN THE ENTIRE IMAGE: Identify all rows (time slots) and all columns (days).
+                    2. ALL DAYS: Ensure you capture every day present in the image (Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday).
+                    3. ALL PERIODS: Extract every single class, lecture, or lab. Do not skip any time slots.
+                    4. CELL SPANNING: If a class spans multiple time slots, capture its full duration (start of first slot to end of last slot).
+                    5. DATA POINTS:
+                       - "subject": The course code (e.g., CS102, MAT201).
+                       - "courseName": The full descriptive name of the subject.
+                       - "teacherName": The name of the professor or instructor.
+                       - "startTime": Start time in 24-hour HH:mm format (CRITICAL: Convert 12h AM/PM to 24h).
+                       - "endTime": End time in 24-hour HH:mm format.
+                       - "room": Building/Room number.
+                       - "type": Classify as "Lecture", "Lab", or "Tutorial".
+                    
+                    OUTPUT FORMAT (Strict JSON):
                     [
                       {
                         "day": "Monday",
                         "periods": [
                           { 
-                            "id": "uuid", 
-                            "subject": "Math", 
-                            "courseName": "Advanced Calculus", 
-                            "teacherName": "Dr. Smith", 
+                            "id": "generate-a-unique-id", 
+                            "subject": "CS101", 
+                            "courseName": "Data Structures", 
+                            "teacherName": "Dr. Aris", 
                             "startTime": "09:00", 
-                            "endTime": "10:00", 
+                            "endTime": "10:30", 
                             "type": "Lecture", 
-                            "room": "101" 
+                            "room": "LHC-102" 
                           }
                         ]
                       }
                     ]
-                    
-                    CRITICAL: 
-                    1. Use 24-hour format for all times. If the image has 12-hour time (AM/PM), convert it.
-                    2. If a field like room or teacher is missing, use an empty string or omit.
-                    3. Return ONLY legitimate JSON.
+
+                    CRITICAL FINAL CHECKS:
+                    - Did you miss any days? (Check Mon-Sun)
+                    - Are all times in HH:mm (24-hour)?
+                    - Is the JSON valid?
+                    - Return ONLY the JSON. No preamble, no markdown fences.
                 `;
 
                 const result = await model.generateContent([
@@ -104,7 +116,12 @@ export async function chatWithAIAction(query: string, context: any): Promise<{ t
 
         for (const modelName of MODELS) {
             try {
-                const model = genAI.getGenerativeModel({ model: modelName });
+                const model = genAI.getGenerativeModel({
+                    model: modelName,
+                    generationConfig: {
+                        temperature: 0.7,
+                    }
+                });
                 const result = await model.generateContent([
                     { text: "You are TimeWise AI, a helpful assistant." },
                     { text: `Context: ${JSON.stringify(context)}\nUser: ${query}` }

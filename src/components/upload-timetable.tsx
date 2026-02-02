@@ -8,7 +8,11 @@ import { Upload, Loader2, FileImage } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { parseTimetableAction } from "@/app/actions/gemini-actions";
 
-export function UploadTimetable() {
+interface UploadTimetableProps {
+    onSuccess?: () => void;
+}
+
+export function UploadTimetable({ onSuccess }: UploadTimetableProps) {
     const [file, setFile] = useState<File | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const { setTimetable } = useStore();
@@ -42,6 +46,7 @@ export function UploadTimetable() {
 
             setTimetable(response.data);
             alert("Timetable parsed successfully!");
+            onSuccess?.();
         } catch (error: any) {
             console.error("Parsing failed:", error);
             alert(`Parsing Failed: ${error.message || "Unknown error"}`);

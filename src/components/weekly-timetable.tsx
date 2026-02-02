@@ -1,18 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Clock, MapPin, BookOpen } from "lucide-react";
+import { Clock, MapPin, BookOpen, User, GraduationCap, Trash2, Plus } from "lucide-react";
 import { DayOfWeek } from "@/types";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { UploadTimetable } from "./upload-timetable";
 
 const DAYS: DayOfWeek[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-import { User, GraduationCap } from "lucide-react";
-
 export function WeeklyTimetable() {
-    const { timetable } = useStore();
+    const { timetable, clearTimetable } = useStore();
+    const [isUploadOpen, setIsUploadOpen] = useState(false);
 
     const getToday = () => {
         const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -21,13 +24,47 @@ export function WeeklyTimetable() {
 
     const currentDay = getToday();
 
+    const handleRemove = () => {
+        if (confirm("Are you sure you want to remove your timetable? This will also reset your attendance data.")) {
+            clearTimetable();
+        }
+    };
+
     return (
         <Card className="w-full">
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="flex items-center gap-2">
                     <BookOpen className="h-5 w-5 text-primary" />
                     Weekly Schedule
                 </CardTitle>
+                <div className="flex gap-2">
+                    <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
+                        <DialogTrigger asChild>
+                            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+                                <Plus className="h-3.5 w-3.5" />
+                                Update
+                            </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-md">
+                            <DialogHeader>
+                                <DialogTitle>Update Timetable</DialogTitle>
+                            </DialogHeader>
+                            <div className="py-4">
+                                <UploadTimetable onSuccess={() => setIsUploadOpen(false)} />
+                            </div>
+                        </DialogContent>
+                    </Dialog>
+
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+                        onClick={handleRemove}
+                    >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Remove
+                    </Button>
+                </div>
             </CardHeader>
             <CardContent>
                 <Tabs defaultValue={currentDay} className="w-full">

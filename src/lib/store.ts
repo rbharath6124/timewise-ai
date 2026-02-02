@@ -9,6 +9,7 @@ interface AppState {
 
     // Actions
     setTimetable: (timetable: Timetable) => void;
+    clearTimetable: () => void;
     updateAttendance: (subject: string, type: 'present' | 'absent') => void;
     resetAttendance: (subject: string) => void;
     editAttendance: (subject: string, attended: number, missed: number) => void;
@@ -26,6 +27,7 @@ export const useStore = create<AppState>()(
             events: [],
 
             setTimetable: (timetable) => set({ timetable }),
+            clearTimetable: () => set({ timetable: [], attendance: [], events: [] }),
 
             updateAttendance: (subject, type) => set((state) => {
                 const existing = state.attendance.find(r => r.subject === subject);

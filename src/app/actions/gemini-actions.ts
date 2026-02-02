@@ -32,40 +32,82 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     }
                 });
                 const prompt = `
-                    TASK: CONVERT UNIVERSITY TIMETABLE TO JSON.
-                    
-                    IMAGE ANALYSIS RULES:
-                    1. THE GRID: Scan the top table. Note there are 9+ time columns.
-                    2. THE BREAKS: "Tea Break" (10:40-11:00) and "Lunch Break" (12:40-01:40) are VERTICAL. You MUST skip over them and continue scanning to the right.
-                    3. AFTERNOON SLOTS: Do not stop at Lunch Break. There are 3 slots after lunch: 01:40, 02:30, and 03:20.
-                    4. TIME CONVERSION (MANDATORY):
-                       - All times after 12:00 PM must be 24-hour.
-                       - 01:40 PM -> 13:40
-                       - 02:30 PM -> 14:30
-                       - 03:20 PM -> 15:20
-                       - 04:10 PM -> 16:10
-                    5. DATA MAPPING: Look at the CODE in the grid (e.g. SSDX 11). Find that code in the LEGEND (bottom table) to get the "Course Name" and "Course Faculty".
+I am using Google Gemini Vision to extract a FULL weekly academic timetable from an image.
+The app is fully AI-only (no manual editing allowed).
 
-                    JSON SCHEMA:
-                    [
-                      {
-                        "day": "Monday | Tuesday | Wednesday | Thursday | Friday",
-                        "periods": [
-                          {
-                            "id": "unique-id",
-                            "subject": "Short Code",
-                            "courseName": "Full Name from Legend",
-                            "teacherName": "Faculty from Legend",
-                            "startTime": "HH:mm (24h)",
-                            "endTime": "HH:mm (24h)",
-                            "type": "Lecture | Lab | Tutorial",
-                            "room": "Room Code"
-                          }
-                        ]
-                      }
-                    ]
-                    
-                    Respond with a JSON array based on the schema above. Include ALL classes for ALL days found in the image.
+CURRENT PROBLEMS:
+1. Some class time slots are mismatched (wrong start/end time).
+2. Some classes are missing entirely.
+3. Break rows (Tea Break, Lunch Break, Prayer) disrupt time alignment.
+4. Merged cells cause later columns to shift incorrectly.
+5. Afternoon sessions are more likely to be skipped or mis-timed.
+
+IMAGE CHARACTERISTICS:
+- A fixed time header row with these exact slots (left to right):
+  09:00–09:50
+  09:50–10:40
+  10:40–11:00 (Tea Break)
+  11:00–11:50
+  11:50–12:40
+  12:40–01:40 (Lunch Break)
+  01:40–02:30
+  02:30–03:20
+  03:20–04:10
+- Rows for Monday to Friday.
+- Cells may span multiple columns.
+- Some cells contain multiple course codes (e.g. SSDX 11/12/13/14).
+- A separate COURSE DETAILS table maps:
+    Course Code → Course Name → Faculty → Hall.
+
+GOAL:
+Fix the parsing so that:
+- EVERY time slot is aligned EXACTLY to the header time.
+- NO classes are skipped.
+- NO time guessing or inference occurs.
+- Afternoon sessions are handled as reliably as morning sessions.
+
+MANDATORY EXTRACTION STRATEGY:
+1. FIRST extract the full TIME HEADER ROW as the canonical source of truth.
+2. THEN for each day (row), map each detected class cell to the correct time slot
+   based on column position, NOT visual proximity.
+3. BREAK rows (Tea Break, Lunch Break, Prayer) MUST be ignored for class creation
+   but MUST be counted for column alignment.
+4. If a class spans multiple columns, duplicate the class entry for EACH covered
+   time slot with the correct start/end time.
+5. If a cell contains multiple course codes, expand them into multiple class entries.
+6. Resolve course_name, faculty, and hall ONLY using the COURSE DETAILS table.
+7. If a value cannot be resolved, leave it as an empty string — DO NOT guess.
+
+OUTPUT REQUIREMENTS (STRICT):
+- Output ONLY valid JSON.
+- NO markdown.
+- NO explanations.
+- NO partial output.
+
+SCHEMA (MUST MATCH EXACTLY):
+{
+  "monday": [
+    {
+      "start": "HH:MM",
+      "end": "HH:MM",
+      "course_code": "string",
+      "course_name": "string",
+      "faculty": "string",
+      "hall": "string"
+    }
+  ],
+  "tuesday": [],
+  "wednesday": [],
+  "thursday": [],
+  "friday": []
+}
+
+VALIDATION RULES (MUST ENFORCE):
+- start < end
+- start/end must match EXACTLY one of the header time slots
+- No overlapping classes in the same day/time
+- No missing time slots unless the cell is truly empty
+- Break periods must never appear as classes
                 `;
 
                 const result = await model.generateContent([
@@ -81,10 +123,36 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                 const response = await result.response;
                 const text = response.text();
 
-                // Since we used responseMimeType: "application/json", 'text' is pure JSON
-                const parsed = JSON.parse(text);
+                // Raw data in day-keyed object format
+                const rawData = JSON.parse(text);
+
+                // Map to our internal array-based format
+                const daysMap: Record<string, string> = {
+                    monday: "Monday",
+                    tuesday: "Tuesday",
+                    wednesday: "Wednesday",
+                    thursday: "Thursday",
+                    friday: "Friday"
+                };
+
+                const transformedData = Object.entries(rawData).map(([dayKey, periods]: [string, any]) => {
+                    return {
+                        day: daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1)),
+                        periods: periods.map((p: any) => ({
+                            id: Math.random().toString(36).substring(7),
+                            subject: p.course_code,
+                            courseName: p.course_name,
+                            teacherName: p.faculty,
+                            startTime: p.start,
+                            endTime: p.end,
+                            room: p.hall,
+                            type: "Lecture"
+                        }))
+                    };
+                });
+
                 console.log(`✅ [PARSER] Success with ${modelName}`);
-                return { success: true, data: parsed };
+                return { success: true, data: transformedData };
             } catch (error: any) {
                 console.warn(`⚠️ [PARSER] Failed with ${modelName}:`, error.message);
                 lastError = error;

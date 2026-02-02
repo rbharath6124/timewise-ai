@@ -37,68 +37,46 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     );
 
                     const prompt = `
-I am using Google Gemini Vision to extract a FULL weekly academic timetable from an image.
-The app is fully AI-only (no manual editing allowed).
+                        TASK: Convert the Academic Timetable image into structured JSON.
+                        
+                        1. CANONICAL TIMES (Reference these for all classes):
+                           - Slots: 09:00-09:50, 09:50-10:40, 11:00-11:50, 11:50-12:40, 01:40-02:30, 02:30-03:20, 03:20-04:10.
+                           - VERTICAL BREAKS: 10:40-11:00 (Tea) and 12:40-01:40 (Lunch). IGNORE THESE.
+                        
+                        2. SCANNING LOGIC:
+                           - For each Day row (Mon-Fri), find every class cell.
+                           - Identify the START and END time for each cell based on the header.
+                           - IMPORTANT: If a cell spans multiple slots (e.g. 11:00 to 12:40), capture the full start/end.
+                           - MULTI-SUBJECT CELLS: If a cell contains multiple codes (e.g. "CEDX 01/07" or "SSDX 11/12/13/14"), you MUST create a SEPARATE JSON object for each code.
+                        
+                        3. LEGEND MATCHING:
+                           - Use the Course Details table (bottom) to look up every Course Code.
+                           - Assign the correct "Course Name", "Faculty/Teacher", and "Hall/Room".
+                        
+                        4. OUTPUT SCHEMA:
+                        {
+                          "monday": [
+                            {
+                              "code": "CEDX 01",
+                              "name": "Full Name from Legend",
+                              "teacher": "Teacher from Legend",
+                              "start": "09:00",
+                              "end": "09:50",
+                              "hall": "ES 001"
+                            },
+                            {
+                              "code": "CEDX 07",
+                              "name": "Full Name from Legend (Matched for 07)",
+                              "teacher": "Teacher from Legend (Matched for 07)",
+                              "start": "09:00",
+                              "end": "09:50",
+                              "hall": "ES 001"
+                            }
+                          ],
+                          "tuesday": [], ...
+                        }
 
-CURRENT PROBLEMS:
-1. Some class time slots are mismatched (wrong start/end time).
-2. Some classes are missing entirely.
-3. Break rows (Tea Break, Lunch Break, Prayer) disrupt time alignment.
-4. Merged cells cause later columns to shift incorrectly.
-5. Afternoon sessions are more likely to be skipped or mis-timed.
-
-IMAGE CHARACTERISTICS:
-- A fixed time header row with these exact slots (left to right):
-  09:00–09:50
-  09:50–10:40
-  10:40–11:00 (Tea Break)
-  11:00–11:50
-  11:50–12:40
-  12:40–01:40 (Lunch Break)
-  01:40–02:30
-  02:30–03:20
-  03:20–04:10
-- Rows for Monday to Friday.
-- Cells may span multiple columns.
-- Some cells contain multiple course codes (e.g. SSDX 11/12/13/14).
-- A separate COURSE DETAILS table maps:
-    Course Code → Course Name → Faculty → Hall.
-
-GOAL:
-Fix the parsing so that:
-- EVERY time slot is aligned EXACTLY to the header time.
-- NO classes are skipped.
-- NO time guessing or inference occurs.
-- Afternoon sessions are handled as reliably as morning sessions.
-
-MANDATORY EXTRACTION STRATEGY:
-1. DEFINE COLUMNS (1-9):
-   1: 09:00-09:50 | 2: 09:50-10:40 | 3: [TEA BREAK] | 4: 11:00-11:50 | 5: 11:50-12:40 | 6: [LUNCH BREAK] | 7: 01:40-02:30 | 8: 02:30-03:20 | 9: 03:20-04:10
-
-2. EXTRACTION RULES:
-   - For every class, identify the START COLUMN and END COLUMN.
-   - Example: A class from 11:00 to 12:40 has col_start: 4 and col_end: 5.
-   - Example: A morning class has col_start: 1 and col_end: 1.
-   - IGNORE Slot 3 and Slot 6.
-   - You MUST look past the vertical "Lunch Break" (Col 6) to find Col 7, 8, 9.
-
-3. LEGEND LOOKUP:
-   - Map every short code (e.g. SSDX 11) to its full name and faculty from the bottom table.
-   - If a cell has multiple codes (CEDX 01/07), return them as a single string "CEDX 01/07".
-
-4. OUTPUT FORMAT:
-   - Return ONLY LEGITIMATE JSON.
-
-SCHEMA:
-{
-  "monday": [
-    { "col_start": 4, "col_end": 5, "course_code": "CED 3202", "course_name": "...", "faculty": "...", "hall": "..." }
-  ],
-  "tuesday": [],
-  "wednesday": [],
-  "thursday": [],
-  "friday": []
-}
+                        CRITICAL: Use 24-hour format (HH:mm) if possible, or standard labels. I will stabilize them in code.
                     `;
 
                     const result = await model.generateContent([
@@ -113,51 +91,38 @@ SCHEMA:
 
                     const response = await result.response;
                     const text = response.text().replace(/```json/g, "").replace(/```/g, "").trim();
-
-                    // Raw data in day-keyed object format
                     const rawData = JSON.parse(text);
 
-                    // Start/End Mapping
-                    const colToStart: Record<number, string> = { 1: "09:00", 2: "09:50", 4: "11:00", 5: "11:50", 7: "13:40", 8: "14:30", 9: "15:20" };
-                    const colToEnd: Record<number, string> = { 1: "09:50", 2: "10:40", 4: "11:50", 5: "12:40", 7: "14:30", 8: "15:20", 9: "16:10" };
+                    // --- STABILIZE & NORMALIZE TRANSFORMATION ---
+                    const normalizeTime = (t: string) => {
+                        if (!t) return "00:00";
+                        const clean = t.replace(/\s/g, "").replace(/\./g, ":");
+                        let [hStr, mStr] = clean.split(":");
+                        let h = parseInt(hStr);
+                        let m = parseInt(mStr) || 0;
+                        if (isNaN(h)) return t;
+                        // Convert 1:xx, 2:xx, 3:xx, 4:xx PM to 24h
+                        if (h >= 1 && h <= 5) h += 12;
+                        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                    };
 
-                    // Map to our internal array-based format
                     const daysMap: Record<string, string> = {
                         monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday", friday: "Friday"
                     };
 
                     const transformedData = Object.entries(rawData).map(([dayKey, periods]: [string, any]) => {
-                        const dayName = daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1));
-
-                        const cleanPeriods = (periods || []).flatMap((p: any) => {
-                            const startTime = colToStart[p.col_start];
-                            const endTime = colToEnd[p.col_end];
-                            if (!startTime || !endTime) return [];
-
-                            // Split multi-codes (e.g. CEDX 01/07)
-                            const rawCodes = p.course_code.split(/[\/\+]/);
-                            const prefix = p.course_code.match(/^[A-Z]+/)?.[0] || "";
-
-                            return rawCodes.map((code: string, idx: number) => {
-                                let cleanCode = code.trim();
-                                if (idx > 0 && !cleanCode.match(/^[A-Z]/) && prefix) cleanCode = `${prefix} ${cleanCode}`;
-
-                                return {
-                                    id: Math.random().toString(36).substring(7),
-                                    subject: cleanCode,
-                                    courseName: p.course_name,
-                                    teacherName: p.faculty,
-                                    startTime,
-                                    endTime,
-                                    room: p.hall,
-                                    type: "Lecture"
-                                };
-                            });
-                        });
-
                         return {
-                            day: dayName,
-                            periods: cleanPeriods
+                            day: daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1)),
+                            periods: (periods || []).map((p: any) => ({
+                                id: Math.random().toString(36).substring(7),
+                                subject: p.code,
+                                courseName: p.name,
+                                teacherName: p.teacher,
+                                startTime: normalizeTime(p.start),
+                                endTime: normalizeTime(p.end),
+                                room: p.hall,
+                                type: "Lecture"
+                            }))
                         };
                     });
 

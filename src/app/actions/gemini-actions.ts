@@ -2,41 +2,20 @@
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+const VERSIONS = ["v1", "v1beta"];
+const MODELS = [
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-2.0-flash-exp",
+    "gemini-pro" // old alias
+];
+
 export async function parseTimetableAction(base64Data: { data: string, mimeType: string }): Promise<any> {
     const apiKey = (process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || "").trim();
-    if (!apiKey) throw new Error("GEMINI_API_KEY not found in environment variables");
+    if (!apiKey) throw new Error("GEMINI_API_KEY (Server) not found in environment variables.");
 
-    console.log(`[Action] Starting parse. Key (first 7): ${apiKey.substring(0, 7)}`);
-
-    // First, let's find what models are ACTUALLY available to this key
-    let availableModels: string[] = [];
-    try {
-        const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-        const listRes = await fetch(listUrl);
-        const listData = await listRes.json();
-
-        if (listData.models) {
-            availableModels = listData.models
-                .filter((m: any) => m.supportedGenerationMethods.includes("generateContent"))
-                .map((m: any) => m.name.replace("models/", ""));
-            console.log("[Action] Available models for this key:", availableModels.join(", "));
-        } else {
-            console.error("[Action] Could not list models (check API key):", JSON.stringify(listData));
-        }
-    } catch (e: any) {
-        console.error("[Action] ListModels failed:", e.message);
-    }
-
-    // Prioritize the models we want to use, but only if they are available
-    const preference = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-pro", "gemini-2.0-flash-exp"];
-    const toTry = preference.filter(m => availableModels.includes(m));
-
-    // If we couldn't list them, try a safe fallback list
-    if (toTry.length === 0) {
-        toTry.push("gemini-1.5-flash", "gemini-1.5-flash-8b");
-    }
-
-    console.log("[Action] Final plan: will try in order:", toTry.join(", "));
+    console.log(`[NUCLEAR] Key length: ${apiKey.length}. Deployment: Production. Region: bom1`);
 
     const prompt = `
     Analyze this timetable image and extract the schedule into a strict JSON format.
@@ -56,86 +35,100 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
 
     let lastError: any = null;
 
-    for (const modelId of toTry) {
-        // Try BOTH v1 and v1beta for each model
-        for (const version of ["v1", "v1beta"]) {
+    // Try EVERY configuration
+    for (const v of VERSIONS) {
+        for (const m of MODELS) {
             try {
-                console.log(`[Action] Attempting ${version}/${modelId}...`);
+                console.log(`[NUCLEAR] Probing ${v}/${m}...`);
 
-                // Construct SDK with specific version
-                // @ts-ignore
-                const genAI = new GoogleGenerativeAI(apiKey, { apiVersion: version });
-                const model = genAI.getGenerativeModel({ model: modelId });
+                // 1. Direct fetch probe (Quickest way to check 404/403)
+                const probeUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}?key=${apiKey}`;
+                const probeRes = await fetch(probeUrl);
 
-                const result = await model.generateContent([
-                    { text: prompt },
-                    { inlineData: { data: base64Data.data, mimeType: base64Data.mimeType } }
-                ]);
+                if (probeRes.status !== 200) {
+                    const probeData = await probeRes.json().catch(() => ({}));
+                    console.warn(`[NUCLEAR] ${v}/${m} probe failed (${probeRes.status}):`, JSON.stringify(probeData));
+                    continue;
+                }
 
-                const response = await result.response;
-                const text = response.text();
+                console.log(`[NUCLEAR] Found active endpoint: ${v}/${m}. Processing...`);
 
-                if (!text) throw new Error("Empty response from AI");
+                // 2. Manual fetch processing (to bypass SDK potential issues)
+                const genUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}:generateContent?key=${apiKey}`;
+                const genRes = await fetch(genUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: prompt },
+                                { inlineData: { data: base64Data.data, mimeType: base64Data.mimeType } }
+                            ]
+                        }]
+                    })
+                });
+
+                if (genRes.status !== 200) {
+                    const errData = await genRes.json().catch(() => ({}));
+                    throw new Error(`Manual fetch failed (${genRes.status}): ${JSON.stringify(errData)}`);
+                }
+
+                const result = await genRes.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (!text) {
+                    console.error("[NUCLEAR] Raw result:", JSON.stringify(result));
+                    throw new Error("Empty response or blocked content");
+                }
 
                 const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
-                console.log(`✅ [Action] SUCCESS with ${version}/${modelId}`);
+                console.log(`✅ [NUCLEAR] SUCCESS with ${v}/${m}`);
                 return JSON.parse(cleanText);
+
             } catch (error: any) {
-                console.warn(`[Action] Refused ${version}/${modelId}:`, error.message);
+                console.error(`❌ [NUCLEAR] Error with ${v}/${m}:`, error.message);
                 lastError = error;
-                // If it's a 404, we immediately move to the next combination
             }
         }
     }
 
-    // Clearer error for the UI
-    const finalErrorMsg = lastError?.message || "All Gemini configurations failed.";
-    console.error(`❌ [Action] FATAL: ${finalErrorMsg}`);
-    throw new Error(`AI processing failed in production. Details: ${finalErrorMsg}`);
+    throw new Error(`All Gemini endpoints returned 404 or refused access. Detailed error: ${lastError?.message || "Unknown"}`);
 }
 
 export async function chatWithAIAction(query: string, context: any): Promise<{ text: string, toolCalls?: any[] }> {
     const apiKey = (process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || "").trim();
-    if (!apiKey) throw new Error("GEMINI_API_KEY not found in environment variables");
+    if (!apiKey) throw new Error("GEMINI_API_KEY (Server) not found.");
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    // Simple fallback logic for chat as well
-    const models = ["gemini-1.5-flash", "gemini-1.5-pro"];
     let lastError: any = null;
 
-    for (const modelId of models) {
-        try {
-            console.log(`[Chat Action] Trying model: ${modelId}`);
-            const model = genAI.getGenerativeModel({ model: modelId });
+    // Try Flash first as it's fastest
+    for (const v of VERSIONS) {
+        for (const m of ["gemini-1.5-flash", "gemini-1.5-pro"]) {
+            try {
+                const genUrl = `https://generativelanguage.googleapis.com/${v}/models/${m}:generateContent?key=${apiKey}`;
+                const res = await fetch(genUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        contents: [
+                            { role: "user", parts: [{ text: "You are TimeWise AI, a helpful assistant." }] },
+                            { role: "model", parts: [{ text: "Understood." }] },
+                            { role: "user", parts: [{ text: `Context: ${JSON.stringify(context)}\nUser: ${query}` }] }
+                        ]
+                    })
+                });
 
-            const chat = model.startChat({
-                history: [
-                    {
-                        role: "user",
-                        parts: [{ text: "You are TimeWise AI, a helpful academic assistant. You help students manage their timetable and attendance." }],
-                    },
-                    {
-                        role: "model",
-                        parts: [{ text: "Understood! I'm ready to help." }],
-                    },
-                ],
-            });
-
-            const result = await chat.sendMessage(`
-                Context: ${JSON.stringify(context)}
-                User Query: ${query}
-            `);
-
-            const response = await result.response;
-            console.log(`✅ [Chat Action] Success with ${modelId}`);
-            return {
-                text: response.text(),
-            };
-        } catch (error: any) {
-            console.warn(`[Chat Action] Fail with ${modelId}:`, error.message);
-            lastError = error;
+                if (res.status === 200) {
+                    const data = await res.json();
+                    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "I processed that.";
+                    console.log(`✅ [NUCLEAR-CHAT] Success with ${v}/${m}`);
+                    return { text };
+                }
+            } catch (error: any) {
+                lastError = error;
+            }
         }
     }
 
-    throw new Error(`AI Chat failed: ${lastError?.message || "Unknown issue"}`);
+    throw new Error(`Chat failed: ${lastError?.message || "No endpoints reachable"}`);
 }

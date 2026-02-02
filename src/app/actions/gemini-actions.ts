@@ -67,26 +67,19 @@ Fix the parsing so that:
 - Afternoon sessions are handled as reliably as morning sessions.
 
 MANDATORY EXTRACTION STRATEGY:
-1. CANONICAL TIME SLOTS:
-   Slot 1: 09:00–09:50
-   Slot 2: 09:50–10:40
-   Slot 3: 10:40–11:00 (Tea Break)
-   Slot 4: 11:00–11:50
-   Slot 5: 11:50–12:40
-   Slot 6: 12:40–01:40 (Lunch Break)
-   Slot 7: 01:40–02:30
-   Slot 8: 02:30–03:20
-   Slot 9: 03:20–04:10
+1. DEFINE COLUMNS (1-9):
+   1: 09:00-09:50 | 2: 09:50-10:40 | 3: [TEA BREAK] | 4: 11:00-11:50 | 5: 11:50-12:40 | 6: [LUNCH BREAK] | 7: 01:40-02:30 | 8: 02:30-03:20 | 9: 03:20-04:10
 
-2. COLUMN MAPPING:
-   - For each day row, identify what is in each of the 9 Slots.
-   - Ignore contents of Slot 3 (Tea Break) and Slot 6 (Lunch Break).
-   - If a cell spans multiple slots, list it for EACH slot it covers.
-   - For Slot 7, 8, and 9, you MUST continue scanning past the lunch break bar.
+2. EXTRACTION RULES:
+   - For every class, identify the START COLUMN and END COLUMN.
+   - Example: A class from 11:00 to 12:40 has col_start: 4 and col_end: 5.
+   - Example: A morning class has col_start: 1 and col_end: 1.
+   - IGNORE Slot 3 and Slot 6.
+   - You MUST look past the vertical "Lunch Break" (Col 6) to find Col 7, 8, 9.
 
-3. DATA RESOLUTION:
-   - Resolve "course_name" and "faculty" from the legend at the bottom.
-   - If a cell has multiple codes (SSDX 11/12), expand them into separate entries for THAT slot.
+3. LEGEND LOOKUP:
+   - Map every short code (e.g. SSDX 11) to its full name and faculty from the bottom table.
+   - If a cell has multiple codes (CEDX 01/07), return them as a single string "CEDX 01/07".
 
 OUTPUT REQUIREMENTS (STRICT):
 - Output ONLY valid JSON.
@@ -97,7 +90,7 @@ OUTPUT REQUIREMENTS (STRICT):
 SCHEMA:
 {
   "monday": [
-    { "slot_num": 7, "course_code": "SSDX 11", "course_name": "...", "faculty": "...", "hall": "..." }
+    { "col_start": 4, "col_end": 5, "course_code": "CED 3202", "course_name": "...", "faculty": "...", "hall": "..." }
   ],
   "tuesday": [],
   "wednesday": [],
@@ -122,16 +115,9 @@ SCHEMA:
                 // Raw data in day-keyed object format
                 const rawData = JSON.parse(text);
 
-                // Official Time Map
-                const slotToTime: Record<number, { s: string, e: string }> = {
-                    1: { s: "09:00", e: "09:50" },
-                    2: { s: "09:50", e: "10:40" },
-                    4: { s: "11:00", e: "11:50" },
-                    5: { s: "11:50", e: "12:40" },
-                    7: { s: "13:40", e: "14:30" },
-                    8: { s: "14:30", e: "15:20" },
-                    9: { s: "15:20", e: "16:10" }
-                };
+                // Start/End Mapping
+                const colToStart: Record<number, string> = { 1: "09:00", 2: "09:50", 4: "11:00", 5: "11:50", 7: "13:40", 8: "14:30", 9: "15:20" };
+                const colToEnd: Record<number, string> = { 1: "09:50", 2: "10:40", 4: "11:50", 5: "12:40", 7: "14:30", 8: "15:20", 9: "16:10" };
 
                 // Map to our internal array-based format
                 const daysMap: Record<string, string> = {
@@ -142,26 +128,25 @@ SCHEMA:
                     const dayName = daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1));
 
                     const cleanPeriods = (periods || []).flatMap((p: any) => {
-                        const time = slotToTime[p.slot_num];
-                        if (!time) return []; // Skip breaks or invalid slots
+                        const startTime = colToStart[p.col_start];
+                        const endTime = colToEnd[p.col_end];
+                        if (!startTime || !endTime) return [];
 
-                        // Split codes but keep prefix if missing (e.g. SSDX 11/12)
+                        // Split multi-codes (e.g. CEDX 01/07)
                         const rawCodes = p.course_code.split(/[\/\+]/);
-                        const prefixMatch = p.course_code.match(/^[A-Z]+/);
-                        const prefix = prefixMatch ? prefixMatch[0] : "";
+                        const prefix = p.course_code.match(/^[A-Z]+/)?.[0] || "";
 
                         return rawCodes.map((code: string, idx: number) => {
                             let cleanCode = code.trim();
-                            if (idx > 0 && !cleanCode.match(/^[A-Z]/) && prefix) {
-                                cleanCode = `${prefix} ${cleanCode}`;
-                            }
+                            if (idx > 0 && !cleanCode.match(/^[A-Z]/) && prefix) cleanCode = `${prefix} ${cleanCode}`;
+
                             return {
                                 id: Math.random().toString(36).substring(7),
                                 subject: cleanCode,
                                 courseName: p.course_name,
                                 teacherName: p.faculty,
-                                startTime: time.s,
-                                endTime: time.e,
+                                startTime,
+                                endTime,
                                 room: p.hall,
                                 type: "Lecture"
                             };

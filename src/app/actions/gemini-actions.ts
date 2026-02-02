@@ -67,16 +67,26 @@ Fix the parsing so that:
 - Afternoon sessions are handled as reliably as morning sessions.
 
 MANDATORY EXTRACTION STRATEGY:
-1. FIRST extract the full TIME HEADER ROW as the canonical source of truth.
-2. THEN for each day (row), map each detected class cell to the correct time slot
-   based on column position, NOT visual proximity.
-3. BREAK rows (Tea Break, Lunch Break, Prayer) MUST be ignored for class creation
-   but MUST be counted for column alignment.
-4. If a class spans multiple columns, duplicate the class entry for EACH covered
-   time slot with the correct start/end time.
-5. If a cell contains multiple course codes, expand them into multiple class entries.
-6. Resolve course_name, faculty, and hall ONLY using the COURSE DETAILS table.
-7. If a value cannot be resolved, leave it as an empty string — DO NOT guess.
+1. CANONICAL TIME SLOTS:
+   Slot 1: 09:00–09:50
+   Slot 2: 09:50–10:40
+   Slot 3: 10:40–11:00 (Tea Break)
+   Slot 4: 11:00–11:50
+   Slot 5: 11:50–12:40
+   Slot 6: 12:40–01:40 (Lunch Break)
+   Slot 7: 01:40–02:30
+   Slot 8: 02:30–03:20
+   Slot 9: 03:20–04:10
+
+2. COLUMN MAPPING:
+   - For each day row, identify what is in each of the 9 Slots.
+   - Ignore contents of Slot 3 (Tea Break) and Slot 6 (Lunch Break).
+   - If a cell spans multiple slots, list it for EACH slot it covers.
+   - For Slot 7, 8, and 9, you MUST continue scanning past the lunch break bar.
+
+3. DATA RESOLUTION:
+   - Resolve "course_name" and "faculty" from the legend at the bottom.
+   - If a cell has multiple codes (SSDX 11/12), expand them into separate entries for THAT slot.
 
 OUTPUT REQUIREMENTS (STRICT):
 - Output ONLY valid JSON.
@@ -84,30 +94,16 @@ OUTPUT REQUIREMENTS (STRICT):
 - NO explanations.
 - NO partial output.
 
-SCHEMA (MUST MATCH EXACTLY):
+SCHEMA:
 {
   "monday": [
-    {
-      "start": "HH:MM",
-      "end": "HH:MM",
-      "course_code": "string",
-      "course_name": "string",
-      "faculty": "string",
-      "hall": "string"
-    }
+    { "slot_num": 7, "course_code": "SSDX 11", "course_name": "...", "faculty": "...", "hall": "..." }
   ],
   "tuesday": [],
   "wednesday": [],
   "thursday": [],
   "friday": []
 }
-
-VALIDATION RULES (MUST ENFORCE):
-- start < end
-- start/end must match EXACTLY one of the header time slots
-- No overlapping classes in the same day/time
-- No missing time slots unless the cell is truly empty
-- Break periods must never appear as classes
                 `;
 
                 const result = await model.generateContent([
@@ -126,53 +122,50 @@ VALIDATION RULES (MUST ENFORCE):
                 // Raw data in day-keyed object format
                 const rawData = JSON.parse(text);
 
-                // --- TIME CORRECTION ENGINE ---
-                const normalizeTime = (t: string) => {
-                    if (!t) return "";
-                    // Remove extra spaces/dots
-                    const clean = t.replace(/\s/g, "").replace(/\./g, ":");
-                    let [hStr, mStr] = clean.split(":");
-                    let h = parseInt(hStr);
-                    let m = parseInt(mStr) || 0;
-
-                    if (isNaN(h)) return t;
-
-                    // Auto-convert afternoon slots (1, 2, 3, 4) to 24h
-                    if (h >= 1 && h <= 5) h += 12;
-
-                    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                // Official Time Map
+                const slotToTime: Record<number, { s: string, e: string }> = {
+                    1: { s: "09:00", e: "09:50" },
+                    2: { s: "09:50", e: "10:40" },
+                    4: { s: "11:00", e: "11:50" },
+                    5: { s: "11:50", e: "12:40" },
+                    7: { s: "13:40", e: "14:30" },
+                    8: { s: "14:30", e: "15:20" },
+                    9: { s: "15:20", e: "16:10" }
                 };
 
                 // Map to our internal array-based format
                 const daysMap: Record<string, string> = {
-                    monday: "Monday",
-                    tuesday: "Tuesday",
-                    wednesday: "Wednesday",
-                    thursday: "Thursday",
-                    friday: "Friday"
+                    monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday", friday: "Friday"
                 };
 
                 const transformedData = Object.entries(rawData).map(([dayKey, periods]: [string, any]) => {
                     const dayName = daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1));
 
                     const cleanPeriods = (periods || []).flatMap((p: any) => {
-                        const start = normalizeTime(p.start);
-                        const end = normalizeTime(p.end);
+                        const time = slotToTime[p.slot_num];
+                        if (!time) return []; // Skip breaks or invalid slots
 
-                        // If course_code has multiple IDs (SSDX 11/12), keep them together as one entry
-                        // Or split them if preferred. Re-reading user request: "If a cell contains multiple course codes, expand them"
-                        const codes = p.course_code.split(/[\/\+]/);
+                        // Split codes but keep prefix if missing (e.g. SSDX 11/12)
+                        const rawCodes = p.course_code.split(/[\/\+]/);
+                        const prefixMatch = p.course_code.match(/^[A-Z]+/);
+                        const prefix = prefixMatch ? prefixMatch[0] : "";
 
-                        return codes.map((code: string) => ({
-                            id: Math.random().toString(36).substring(7),
-                            subject: code.trim(),
-                            courseName: p.course_name,
-                            teacherName: p.faculty,
-                            startTime: start,
-                            endTime: end,
-                            room: p.hall,
-                            type: "Lecture"
-                        }));
+                        return rawCodes.map((code: string, idx: number) => {
+                            let cleanCode = code.trim();
+                            if (idx > 0 && !cleanCode.match(/^[A-Z]/) && prefix) {
+                                cleanCode = `${prefix} ${cleanCode}`;
+                            }
+                            return {
+                                id: Math.random().toString(36).substring(7),
+                                subject: cleanCode,
+                                courseName: p.course_name,
+                                teacherName: p.faculty,
+                                startTime: time.s,
+                                endTime: time.e,
+                                room: p.hall,
+                                type: "Lecture"
+                            };
+                        });
                     });
 
                     return {

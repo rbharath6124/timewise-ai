@@ -37,28 +37,64 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     );
 
                     const prompt = `
-                        EXTRACT THE FULL ACADEMIC TIMETABLE.
-                        
-                        1. THE GRID (MUST EXTRACT ALL 9 COLUMNS):
-                           C1: 09:00-09:50 | C2: 09:50-10:40 | C3: TEA BREAK | C4: 11:00-11:50 | C5: 11:50-12:40 | C6: LUNCH BREAK | C7: 01:40-02:30 | C8: 02:30-03:20 | C9: 03:20-04:10
+                        I am using Google Gemini Vision to extract a FULL weekly academic timetable from an image.
+                        The app is fully AI-only (no manual editing allowed).
 
-                        2. CRITICAL - MULTI-SUBJECT CELLS:
-                           - Some cells contain multiple subjects (e.g., "CEDX 01/07" or "SSDX 11/12").
-                           - You MUST report these as separate entries if possible, or return the raw string (e.g. "CEDX 01/07") and I will split it.
-                        
-                        3. CRITICAL - AFTERNOON SESSIONS:
-                           - YOU MUST JUMP OVER THE LUNCH BREAK (Column 6).
-                           - Extract all classes sitting in Columns 7, 8, and 9. 
+                        IMAGE CHARACTERISTICS:
+                        - A fixed time header row with these exact slots (left to right):
+                          09:00–09:50
+                          09:50–10:40
+                          10:40–11:00 (Tea Break)
+                          11:00–11:50
+                          11:50–12:40
+                          12:40–01:40 (Lunch Break)
+                          01:40–02:30
+                          02:30–03:20
+                          03:20–04:10
+                        - Rows for Monday to Friday.
+                        - Cells may span multiple columns.
+                        - Some cells contain multiple course codes (e.g. SSDX 11/12/13/14).
+                        - A separate COURSE DETAILS table maps: Course Code → Course Name → Faculty → Hall.
 
-                        4. LEGEND LOOKUP:
-                           - Match every code to the "Course Name" and "Faculty" in the bottom table.
+                        MANDATORY EXTRACTION STRATEGY:
+                        1. FIRST extract the full TIME HEADER ROW as the canonical source of truth.
+                        2. THEN for each day (row), map each detected class cell to the correct time slot based on column position, NOT visual proximity.
+                        3. BREAK rows (Tea Break, Lunch Break, Prayer) MUST be ignored for class creation but MUST be counted for column alignment.
+                        4. If a class spans multiple columns, duplicate the class entry for EACH covered time slot with the correct start/end time.
+                        5. If a cell contains multiple course codes, expand them into multiple class entries for that same time slot.
+                        6. Resolve course_name, faculty, and hall ONLY using the COURSE DETAILS table.
+                        7. If a value cannot be resolved, leave it as an empty string — DO NOT guess.
 
-                        SCHEMA:
+                        VALIDATION RULES (MUST ENFORCE):
+                        - Use 24-hour format (HH:MM) for all times (e.g., 01:40 PM must be 13:40, 04:10 PM must be 16:10).
+                        - start < end
+                        - start/end must match EXACTLY one of the header time slots (converted to 24h)
+                        - No overlapping classes in the same day/time
+                        - No missing time slots unless the cell is truly empty
+                        - Break periods must never appear as classes
+
+                        OUTPUT REQUIREMENTS (STRICT):
+                        - Output ONLY valid JSON.
+                        - NO markdown.
+                        - NO explanations.
+                        - NO partial output.
+
+                        SCHEMA (MUST MATCH EXACTLY):
                         {
                           "monday": [
-                             { "start_col": 1, "end_col": 1, "code": "CEDX 01/07", "name": "...", "teacher": "...", "hall": "..." },
-                             { "start_col": 7, "end_col": 7, "code": "SSDX 11/12", "name": "...", "teacher": "...", "hall": "..." }
-                          ], ...
+                            {
+                              "start": "HH:MM",
+                              "end": "HH:MM",
+                              "course_code": "string",
+                              "course_name": "string",
+                              "faculty": "string",
+                              "hall": "string"
+                            }
+                          ],
+                          "tuesday": [],
+                          "wednesday": [],
+                          "thursday": [],
+                          "friday": []
                         }
                     `;
 
@@ -76,10 +112,6 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     const text = response.text().replace(/```json/g, "").replace(/```/g, "").trim();
                     const rawData = JSON.parse(text);
 
-                    // --- TIME MAP ---
-                    const colToStart: Record<number, string> = { 1: "09:00", 2: "09:50", 4: "11:00", 5: "11:50", 7: "13:40", 8: "14:30", 9: "15:20" };
-                    const colToEnd: Record<number, string> = { 1: "09:50", 2: "10:40", 4: "11:50", 5: "12:40", 7: "14:30", 8: "15:20", 9: "16:10" };
-
                     const daysMap: Record<string, string> = {
                         monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday", friday: "Friday"
                     };
@@ -87,31 +119,16 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     const transformedData = Object.entries(rawData).map(([dayKey, periods]: [string, any]) => {
                         const dayName = daysMap[dayKey.toLowerCase()] || (dayKey.charAt(0).toUpperCase() + dayKey.slice(1));
 
-                        const cleanPeriods = (periods || []).flatMap((p: any) => {
-                            const startTime = colToStart[p.start_col];
-                            const endTime = colToEnd[p.end_col] || colToEnd[p.start_col];
-                            if (!startTime || !endTime) return [];
-
-                            // FAILSAFE SUBJECT SPLITTER: If the AI combined "CEDX 01/07", we split it here
-                            const subjects = p.code.split(/[\/\+]/);
-                            const prefix = p.code.match(/^[A-Z]+/)?.[0] || "";
-
-                            return subjects.map((sub: string, idx: number) => {
-                                let cleanSub = sub.trim();
-                                if (idx > 0 && !cleanSub.match(/^[A-Z]/)) cleanSub = `${prefix} ${cleanSub}`;
-
-                                return {
-                                    id: Math.random().toString(36).substring(7),
-                                    subject: cleanSub,
-                                    courseName: p.name,
-                                    teacherName: p.teacher,
-                                    startTime,
-                                    endTime,
-                                    room: p.hall,
-                                    type: "Lecture"
-                                };
-                            });
-                        }).sort((a: any, b: any) => a.startTime.localeCompare(b.startTime));
+                        const cleanPeriods = (periods || []).map((p: any) => ({
+                            id: Math.random().toString(36).substring(7),
+                            subject: p.course_code || "",
+                            courseName: p.course_name || "",
+                            teacherName: p.faculty || "",
+                            startTime: p.start || "",
+                            endTime: p.end || "",
+                            room: p.hall || "",
+                            type: "Lecture"
+                        })).filter((p: any) => p.subject && p.startTime && p.endTime);
 
                         return { day: dayName, periods: cleanPeriods };
                     });

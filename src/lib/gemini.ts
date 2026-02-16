@@ -3,14 +3,14 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 // Initialize inside functions to ensure env vars are fresh
 
 const MODELS_TO_TRY = [
-  "gemini-1.5-flash-latest",
-  "gemini-1.5-flash",
-  "gemini-1.5-flash-8b",
-  "gemini-2.0-flash-exp",
-  "gemini-1.5-pro-latest"
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-2.5-pro",
+  "gemini-pro-latest",
+  "gemini-2.0-flash"
 ];
 
-const API_VERSIONS = ["v1beta", "v1"];
+const API_VERSIONS = ["v1beta"];
 
 export async function parseTimetableImage(file: File): Promise<any> {
   const apiKey = (process.env.NEXT_PUBLIC_GEMINI_API_KEY || "").trim();
@@ -75,7 +75,7 @@ export async function chatWithAI(query: string, context: any): Promise<{ text: s
     for (const modelId of MODELS_TO_TRY) {
       try {
         console.log(`Trying ${version} chat with: ${modelId}`);
-        // @ts-ignore
+        // @ts-expect-error - version type may lag behind SDK updates
         const genAI = new GoogleGenerativeAI(apiKey, { apiVersion: version });
         const model = genAI.getGenerativeModel({ model: modelId });
 
@@ -110,7 +110,7 @@ export async function chatWithAI(query: string, context: any): Promise<{ text: s
               parts: [{ text: "Understood! I'm ready to help you manage my schedule. How can I assist you today?" }],
             },
           ],
-          // Tool calling only works in v1beta for some models
+          // Tool calling works in v1beta for supported models
           tools: version === "v1beta" ? (tools as any) : undefined,
         });
 

@@ -2,13 +2,14 @@
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const VERSIONS = ["v1", "v1beta"];
+const VERSIONS = ["v1beta"];
 
 const MODELS = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-pro"
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
+    "gemini-2.5-pro",
+    "gemini-pro-latest",
+    "gemini-2.0-flash"
 ];
 
 export async function parseTimetableAction(base64Data: { data: string, mimeType: string }): Promise<any> {
@@ -99,13 +100,13 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     `;
 
                     const result = await model.generateContent([
+                        { text: prompt },
                         {
                             inlineData: {
                                 data: base64Data.data,
                                 mimeType: base64Data.mimeType
                             }
-                        },
-                        { text: prompt }
+                        }
                     ]);
 
                     const response = await result.response;
@@ -136,13 +137,17 @@ export async function parseTimetableAction(base64Data: { data: string, mimeType:
                     console.log(`✅ [PARSER] Success with ${modelName} (${version})`);
                     return { success: true, data: transformedData };
                 } catch (error: any) {
-                    console.warn(`⚠️ [PARSER] Failed with ${modelName} (${version}):`, error.message);
+                    const message = error?.message || "Unknown error";
+                    console.warn(`⚠️ [PARSER] Failed with ${modelName} (${version}):`, message);
                     lastError = error;
                 }
             }
         }
 
-        return { error: `Parsing failed after trying all models: ${lastError?.message || "No models available"}` };
+        return {
+            error: `Parsing failed after trying all models: ${lastError?.message || "No models available"}. ` +
+                `Tip: Ensure your GEMINI_API_KEY is valid and that the selected models are enabled for your project.`
+        };
 
     } catch (error: any) {
         console.error("Gemini Parsing Action Global Error:", error);

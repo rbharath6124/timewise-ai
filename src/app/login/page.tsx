@@ -12,7 +12,7 @@ function LoginContent() {
     const error = searchParams.get("error");
 
     const errorMessage = error === "AccessDenied"
-        ? "Your email is not on the authorized list."
+        ? "Please sign in with a Gmail address (@gmail.com)."
         : "An error occurred during sign-in.";
 
     return (

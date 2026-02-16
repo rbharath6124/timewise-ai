@@ -1,6 +1,5 @@
 import { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
-import { AUTHORIZED_EMAILS } from "@/config/auth-whitelist";
 
 export const authOptions: NextAuthOptions = {
     providers: [
@@ -14,19 +13,14 @@ export const authOptions: NextAuthOptions = {
             console.log("Sign-in attempt:", user.email);
 
             if (!user.email) return false;
-
-            const isAuthorized = AUTHORIZED_EMAILS.some(email =>
-                email.toLowerCase() === user.email?.toLowerCase()
-            );
-
-            if (isAuthorized) {
-                console.log("Access Granted");
-                return true;
+            const email = user.email.toLowerCase();
+            const isGmail = email.endsWith("@gmail.com");
+            if (!isGmail) {
+                console.log("Access Denied: non-Gmail domain:", email);
+                return false;
             }
-
-            console.log("Access Denied for:", user.email);
-            console.log("Authorized list:", AUTHORIZED_EMAILS);
-            return false;
+            console.log("Access Granted (Gmail):", email);
+            return true;
         },
     },
     pages: {
